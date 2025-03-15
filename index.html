@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>M3U8 Downloader</title>
+    <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            background: #f4f4f4;
+            padding: 20px;
+        }
+        #container {
+            max-width: 500px;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
+            margin: auto;
+        }
+        input, button {
+            width: 90%;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        #statusBox {
+            width: 90%;
+            height: 150px;
+            background: #eee;
+            padding: 10px;
+            border-radius: 5px;
+            text-align: left;
+            overflow-y: auto;
+            margin: 10px auto;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="container">
+        <h2>M3U8 Downloader</h2>
+        <input type="text" id="m3u8Url" placeholder="Enter M3U8 URL">
+        <button id="downloadBtn" onclick="downloadM3U8()">Download</button>
+        <div id="statusBox"></div>
+    </div>
+
+    <script>
+        const { createFFmpeg, fetchFile } = FFmpeg;
+        const ffmpeg = createFFmpeg({ log: true, corePath: "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.6/dist/ffmpeg-core.js" });
+
+        function logStatus(message) {
+            const statusBox = document.getElementById("statusBox");
+            statusBox.innerHTML += message + "<br>";
+            statusBox.scrollTop = statusBox.scrollHeight;
+        }
+
+        async function downloadM3U8() {
+            const url = document.getElementById("m3u8Url").value;
+            if (!url) {
+                alert("Please enter an M3U8 URL");
+                return;
+            }
+
+            logStatus("Loading FFmpeg...");
+            if (!ffmpeg.isLoaded()) await ffmpeg.load();
+
+            logStatus("Fetching M3U8 file...");
+            try {
+                const m3u8Content = await fetchText(url);
+                const baseUrl = url.substring(0, url.lastIndexOf("/") + 1);
+                const segmentUrls = extractSegmentUrls(m3u8Content, baseUrl);
+                
+                if (segmentUrls.length === 0) {
+                    logStatus("No video segments found.");
+                    return;
+                }
+
+                logStatus(`Downloading ${segmentUrls.length} segments...`);
+                const segmentFiles = [];
+
+                for (let i = 0; i < segmentUrls.length; i++) {
+                    logStatus(`Downloading segment ${i + 1}/${segmentUrls.length}...`);
+                    const segmentData = await fetchFile(segmentUrls[i]);
+                    const segmentName = `segment_${i}.ts`;
+                    ffmpeg.FS("writeFile", segmentName, segmentData);
+                    segmentFiles.push(`file '${segmentName}'`);
+                }
+
+                logStatus("Merging segments...");
+                const concatList = segmentFiles.join("\n");
+                ffmpeg.FS("writeFile", "filelist.txt", concatList);
+
+                await ffmpeg.run("-f", "concat", "-safe", "0", "-i", "filelist.txt", "-c", "copy", "output.mp4");
+
+                const data = ffmpeg.FS("readFile", "output.mp4");
+                const videoBlob = new Blob([data.buffer], { type: "video/mp4" });
+                const downloadLink = document.createElement("a");
+                downloadLink.href = URL.createObjectURL(videoBlob);
+                downloadLink.download = "video.mp4";
+                downloadLink.click();
+
+                logStatus("Download complete!");
+            } catch (error) {
+                console.error("Error:", error);
+                logStatus("Failed to download.");
+            }
+        }
+
+        async function fetchText(url) {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`Failed to fetch: ${url}`);
+            return response.text();
+        }
+
+        function extractSegmentUrls(m3u8Content, baseUrl) {
+            return m3u8Content
+                .split("\n")
+                .filter(line => line.trim() && !line.startsWith("#"))
+                .map(segment => segment.startsWith("http") ? segment : baseUrl + segment);
+        }
+    </script>
+
+</body>
+</html>
